@@ -89,7 +89,9 @@ def build_graph_sequence_from_npz(
             edge_index = torch.empty((2, 0), dtype=torch.long)
             edge_attr = torch.empty((0, 2), dtype=torch.float)
         else:
-            edge_index = torch.tensor([edges_t["src"], edges_t["dst"]], dtype=torch.long)
+            edge_index = torch.tensor(
+                np.stack([edges_t["src"], edges_t["dst"]], axis=0), dtype=torch.long
+            )
             edge_attr = torch.tensor(
                 np.stack([edges_t["weight"], edges_t["edge_type"]], axis=1), dtype=torch.float
             )
