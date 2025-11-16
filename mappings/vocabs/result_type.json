@@ -1,0 +1,11 @@
+[
+  "<pad>",
+  "<unk>",
+  "<none>",
+  "jump_ball",
+  "def_rebound",
+  "turnover",
+  "made_shot",
+  "period_start",
+  "unfinished"
+]

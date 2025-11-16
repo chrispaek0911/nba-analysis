@@ -1,0 +1,9 @@
+.DS_Store
+processed/
+outputs/
+graph_data*/
+tmp_passes/
+526-531array/
+526-531edge/
+*.npz
+*.parquet
