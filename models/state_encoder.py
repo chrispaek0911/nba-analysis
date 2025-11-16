@@ -49,7 +49,12 @@ class FrameGNNEncoder(nn.Module):
     def forward(self, x: Tensor, edge_index: Tensor, edge_attr: Optional[Tensor] = None) -> Tensor:
         h = x
         for conv in self.layers:
-            h = conv(h, edge_index, edge_attr=edge_attr)
+            # SAGEConv does not support multi-dim edge_attr; if provided, use first column as edge_weight.
+            if edge_attr is not None:
+                edge_weight = edge_attr[:, 0] if edge_attr.dim() > 1 else edge_attr
+                h = conv(h, edge_index, edge_weight=edge_weight)
+            else:
+                h = conv(h, edge_index)
             h = self.act(h)
             h = self.dropout(h)
         return h
