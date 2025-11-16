@@ -1,12 +1,17 @@
 """Utilities to turn graph_data npz into a PyG Batch sequence with richer node features.
 
-This builds per-frame Batches with:
-- node features: positions (x,y,z) + velocity (vx,vy,vz) + team one-hot (ball/off/def) + is_ball flag.
-- edges: per-frame base_edges filtered by frame_idx; edge_attr = [weight, edge_type].
+Builds per-frame Batches with 11-dim node features:
+    [pos_x, pos_y, pos_z,
+     vel_x, vel_y, vel_z,
+     team_onehot(ball/off/def) 3-ch,
+     is_ball,
+     is_possessor]
+
+Edges: per-frame base_edges filtered by frame_idx; edge_attr = [weight, edge_type].
 
 Usage:
-    seq, node_feat_dim = build_graph_sequence_from_npz(npz_path, offense_team_id=<optional>)
-    # seq is a list of Batch, length = num_frames, ready for StateEncoder
+    seq, node_feat_dim = build_graph_sequence_from_npz(npz_path, offense_team_id=<optional>, seq_len=16)
+    # seq is a list of Batch, length = min(T, seq_len), ready for StateEncoder
 """
 
 from __future__ import annotations
@@ -35,16 +40,17 @@ def _safe_offense_team_id(labels_json: Optional[str], node_team_ids: np.ndarray)
 
 
 def build_graph_sequence_from_npz(
-    npz_path: Union[str, Path], offense_team_id: Optional[int] = None
+    npz_path: Union[str, Path], offense_team_id: Optional[int] = None, seq_len: int = 16
 ) -> Tuple[List[Batch], int]:
     """
     Convert a single play npz into a list of PyG Batch objects (one per frame) with expanded node features.
 
-    Node features per node:
+    Node features per node (total 11-dim):
         positions (x,y,z) +
         velocity (vx,vy,vz) +
         team one-hot (ball/offense/defense) +
-        is_ball flag
+        is_ball flag +
+        is_possessor flag
     """
     data = np.load(Path(npz_path), allow_pickle=True)
     positions = data["positions"]  # (T, 11, 3)
@@ -58,6 +64,23 @@ def build_graph_sequence_from_npz(
     if T > 1:
         velocity[1:] = positions[1:] - positions[:-1]
         velocity[-1] = velocity[-2]
+
+    # possessor flag per frame (default zeros)
+    possessor_flag = np.zeros((T, N), dtype=np.float32)
+    possessor_ids = data["possessor_player_ids"] if "possessor_player_ids" in data.files else None
+    if possessor_ids is not None:
+        # map player_id -> node index
+        pid_to_idx = {int(pid): idx for idx, pid in enumerate(node_player_ids) if int(pid) != -1}
+        for t, pid in enumerate(possessor_ids):
+            try:
+                pid_int = int(pid)
+            except (TypeError, ValueError):
+                continue
+            idx = pid_to_idx.get(pid_int)
+            if idx is not None:
+                possessor_flag[t, idx] = 1.0
+        # ball node must stay 0
+        possessor_flag[:, 0] = 0.0
 
     # team one-hot: ball/off/def
     team_onehot = np.zeros((N, 3), dtype=np.float32)
@@ -75,13 +98,18 @@ def build_graph_sequence_from_npz(
     is_ball = (node_team_ids == -1).astype(np.float32)
     is_ball = np.broadcast_to(is_ball, (T, N))[..., None]
 
-    # final node features: (T, N, 3 + 3 + 3 + 1) = (T, N, 10)
-    x = np.concatenate([positions, velocity, team_onehot, is_ball], axis=-1)
+    # is_possessor
+    is_possessor = possessor_flag[..., None]  # (T, N, 1)
+
+    # final node features: (T, N, 3 + 3 + 3 + 1 + 1) = (T, N, 11)
+    x = np.concatenate([positions, velocity, team_onehot, is_ball, is_possessor], axis=-1)
     node_feat_dim = x.shape[-1]
 
     base_edges = data["base_edges"]
+    # trim to last seq_len frames if needed
+    start = max(0, T - seq_len)
     seq: List[Batch] = []
-    for t in range(T):
+    for t in range(start, T):
         xt = torch.tensor(x[t], dtype=torch.float)  # (N, D)
         mask = base_edges["frame_idx"] == t
         edges_t = base_edges[mask]
@@ -99,4 +127,3 @@ def build_graph_sequence_from_npz(
         seq.append(Batch.from_data_list([data_t]))
 
     return seq, node_feat_dim
-
