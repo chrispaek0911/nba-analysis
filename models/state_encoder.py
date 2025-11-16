@@ -172,8 +172,8 @@ class StateEncoder(nn.Module):
 
         for frame in graph_seq:
             node_emb = self.gnn(frame.x, frame.edge_index, getattr(frame, "edge_attr", None))
-            if last_node_emb is None:
-                last_node_emb = node_emb
+              # track the latest frame's node embeddings for action heads
+            last_node_emb = node_emb
             frame_embed = self.aggregator(node_emb, frame.ptr, frame.batch)
             frame_embeds.append(frame_embed)
 
