@@ -7,3 +7,5 @@ tmp_passes/
 526-531edge/
 *.npz
 *.parquet
+data/
+others/
