@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from models.state_encoder import StateEncoder
 from models.global_features import build_global_features
