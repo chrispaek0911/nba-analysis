@@ -7,5 +7,7 @@ tmp_passes/
 526-531edge/
 *.npz
 *.parquet
+__pycache__/
+*.pyc
 data/
 others/

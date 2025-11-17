@@ -49,7 +49,7 @@ class FrameGNNEncoder(nn.Module):
     def forward(self, x: Tensor, edge_index: Tensor, edge_attr: Optional[Tensor] = None) -> Tensor:
         h = x
         for conv in self.layers:
-             # Some PyG builds do not expose edge_weight; fall back to unweighted edges.
+            # Some PyG builds do not expose edge_weight; fall back to unweighted edges.
             h = conv(h, edge_index)
             h = self.act(h)
             h = self.dropout(h)
@@ -173,7 +173,7 @@ class StateEncoder(nn.Module):
 
         for frame in graph_seq:
             node_emb = self.gnn(frame.x, frame.edge_index, getattr(frame, "edge_attr", None))
-              # track the latest frame's node embeddings for action heads
+            # track the latest frame's node embeddings for action heads
             last_node_emb = node_emb
             frame_embed = self.aggregator(node_emb, frame.ptr, frame.batch)
             frame_embeds.append(frame_embed)
@@ -183,4 +183,3 @@ class StateEncoder(nn.Module):
         z = trans_out[:, -1, :]  # last-frame representation
 
         return StateEncoderOutput(z=z, last_node_emb=last_node_emb)
-
