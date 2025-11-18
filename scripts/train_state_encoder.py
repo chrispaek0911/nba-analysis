@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import pandas as pd
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -14,12 +15,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from models.state_encoder import StateEncoder
-from models.global_features import build_global_features
 from scripts.dataset_play_seq import PlaySeqDataset, to_device
 
 
-def infer_num_classes_from_parquet(parquet_root: Path, label_key: str) -> int:
-    """Scan parquet files to infer label cardinality without loading graph data."""
+def infer_label_mapping(parquet_root: Path, label_key: str) -> Dict[int, int]:
+    """Scan parquet files to build label -> index mapping (consecutive IDs)."""
     vals = set()
     for p in ParquetIterator(parquet_root):
         # prefer label_<key> then raw key
@@ -30,9 +30,8 @@ def infer_num_classes_from_parquet(parquet_root: Path, label_key: str) -> int:
             vals.update(int(v) for v in p[key].dropna().unique())
         except Exception:
             continue
-    if not vals:
-        return 1
-    return max(vals) + 1
+    mapping = {v: i for i, v in enumerate(sorted(vals))}
+    return mapping
 
 
 class ParquetIterator:
@@ -76,7 +75,8 @@ def main():
     args = parse_args()
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
-    num_classes = infer_num_classes_from_parquet(args.parquet_root, args.label_key)
+    label_mapping = infer_label_mapping(args.parquet_root, args.label_key)
+    num_classes = max(label_mapping.values()) + 1 if label_mapping else 1
 
     dataset = PlaySeqDataset(
         graph_root=args.graph_root,
@@ -100,7 +100,11 @@ def main():
             if label_val is None:
                 continue  # skip if label missing
             seq = to_device(seq, device)
-            label = torch.tensor([int(label_val)], device=device)
+            if label_mapping and int(label_val) in label_mapping:
+                label_idx = label_mapping[int(label_val)]
+            else:
+                continue  # skip unknown label
+            label = torch.tensor([label_idx], device=device)
 
             out = encoder(seq)
             z = out.z  # (batch, 128)
