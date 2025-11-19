@@ -135,6 +135,8 @@ def main():
             if "optim" in ckpt and ckpt["optim"]:
                 optim.load_state_dict(ckpt["optim"])
 
+    total_steps = start_idx
+
     for epoch in range(start_epoch, args.epochs):
         for step, (seq, node_feat_dim, global_feats, label_val, npz_path) in enumerate(loader, 1):
             # if resuming mid-epoch, skip processed steps
@@ -167,14 +169,16 @@ def main():
             optim.zero_grad()
             loss.backward()
             optim.step()
+            total_steps += 1
             if step % 50 == 0:
-                print(f"[epoch {epoch+1} step {step}] loss={loss.item():.4f} path={npz_path}")
-            if args.save_every and step % args.save_every == 0:
+                print(f"[epoch {epoch+1} step {step} global_step {total_steps}] loss={loss.item():.4f} path={npz_path}")
+            if args.save_every and total_steps % args.save_every == 0:
                 save_ckpt(
                     args.ckpt,
                     {
                         "epoch": epoch,
                         "idx": step,
+                        "global_step": total_steps,
                         "feat_keys": feat_keys,
                         "num_classes": num_classes,
                         "encoder": encoder.state_dict(),
