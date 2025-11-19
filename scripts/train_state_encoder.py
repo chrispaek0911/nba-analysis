@@ -63,12 +63,35 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--device", type=str, default="cuda")
+    p.add_argument("--ckpt", type=Path, default=None, help="checkpoint path to save/load")
+    p.add_argument("--save-every", type=int, default=100, help="save checkpoint every N steps")
+    p.add_argument("--no-shuffle", action="store_true", help="disable shuffling (for step resume)")
     return p.parse_args()
 
 
 def _collate(batch):
     # batch_size=1 assumed for simplicity; just unwrap
     return batch[0]
+
+
+def load_ckpt(ckpt_path: Optional[Path], encoder, head, optim, device):
+    if ckpt_path is None or not ckpt_path.exists():
+        return None
+    ckpt = torch.load(ckpt_path, map_location=device)
+    if "encoder" in ckpt:
+        encoder.load_state_dict(ckpt["encoder"])
+    if head is not None and "head" in ckpt and isinstance(head, nn.Module):
+        head.load_state_dict(ckpt["head"])
+    if optim is not None and "optim" in ckpt and isinstance(optim, torch.optim.Optimizer):
+        optim.load_state_dict(ckpt["optim"])
+    return ckpt
+
+
+def save_ckpt(ckpt_path: Optional[Path], state: Dict) -> None:
+    if ckpt_path is None:
+        return
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(state, ckpt_path)
 
 
 def main():
@@ -85,7 +108,7 @@ def main():
         stage=args.stage,
         label_key=args.label_key,
     )
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=_collate)
+    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=not args.no_shuffle, collate_fn=_collate)
 
     encoder = StateEncoder(node_feat_dim=11, hidden_dim=128).to(device)
     # head input: encoder z (128) + global feats (len(feat_keys) determined lazily)
@@ -94,9 +117,29 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optim: Optional[torch.optim.Optimizer] = None
     feat_keys: Optional[List[str]] = None
+    start_epoch = 0
+    start_idx = 0
 
-    for epoch in range(args.epochs):
+    # optional resume
+    ckpt = load_ckpt(args.ckpt, encoder, head, optim, device)
+    if ckpt:
+        start_epoch = ckpt.get("epoch", 0)
+        start_idx = ckpt.get("idx", 0)
+        feat_keys = ckpt.get("feat_keys")
+        num_classes = ckpt.get("num_classes", num_classes)
+        if feat_keys is not None:
+            head = nn.Linear(128 + len(feat_keys), num_classes).to(device)
+            optim = torch.optim.Adam(list(encoder.parameters()) + list(head.parameters()), lr=args.lr)
+            if "head" in ckpt and ckpt["head"]:
+                head.load_state_dict(ckpt["head"])
+            if "optim" in ckpt and ckpt["optim"]:
+                optim.load_state_dict(ckpt["optim"])
+
+    for epoch in range(start_epoch, args.epochs):
         for step, (seq, node_feat_dim, global_feats, label_val, npz_path) in enumerate(loader, 1):
+            # if resuming mid-epoch, skip processed steps
+            if epoch == start_epoch and step <= start_idx:
+                continue
             if label_val is None:
                 continue  # skip if label missing
             seq = to_device(seq, device)
@@ -126,7 +169,22 @@ def main():
             optim.step()
             if step % 50 == 0:
                 print(f"[epoch {epoch+1} step {step}] loss={loss.item():.4f} path={npz_path}")
+            if args.save_every and step % args.save_every == 0:
+                save_ckpt(
+                    args.ckpt,
+                    {
+                        "epoch": epoch,
+                        "idx": step,
+                        "feat_keys": feat_keys,
+                        "num_classes": num_classes,
+                        "encoder": encoder.state_dict(),
+                        "head": head.state_dict() if head else None,
+                        "optim": optim.state_dict() if optim else None,
+                    },
+                )
 
+        # reset start_idx after the first resumed epoch
+        start_idx = 0
         print(f"epoch {epoch+1} done")
 
 
