@@ -96,7 +96,7 @@ def main():
     feat_keys: Optional[List[str]] = None
 
     for epoch in range(args.epochs):
-        for seq, node_feat_dim, global_feats, label_val, npz_path in loader:
+        for step, (seq, node_feat_dim, global_feats, label_val, npz_path) in enumerate(loader, 1):
             if label_val is None:
                 continue  # skip if label missing
             seq = to_device(seq, device)
@@ -124,6 +124,8 @@ def main():
             optim.zero_grad()
             loss.backward()
             optim.step()
+            if step % 50 == 0:
+                print(f"[epoch {epoch+1} step {step}] loss={loss.item():.4f} path={npz_path}")
 
         print(f"epoch {epoch+1} done")
 
