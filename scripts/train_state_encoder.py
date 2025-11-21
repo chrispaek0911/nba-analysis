@@ -66,6 +66,8 @@ def parse_args():
     p.add_argument("--ckpt", type=Path, default=None, help="checkpoint path to save/load")
     p.add_argument("--save-every", type=int, default=100, help="save checkpoint every N steps")
     p.add_argument("--no-shuffle", action="store_true", help="disable shuffling (for step resume)")
+    p.add_argument("--num-workers", type=int, default=2, help="dataloader workers")
+    p.add_argument("--no-pin-memory", action="store_true", help="disable pin_memory in dataloader")
     return p.parse_args()
 
 
@@ -108,34 +110,34 @@ def main():
         stage=args.stage,
         label_key=args.label_key,
     )
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=not args.no_shuffle, collate_fn=_collate)
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=not args.no_shuffle,
+        collate_fn=_collate,
+        num_workers=args.num_workers,
+        pin_memory=not args.no_pin_memory,
+    )
 
-    encoder = StateEncoder(node_feat_dim=11, hidden_dim=128).to(device)
-    # head input: encoder z (128) + global feats (len(feat_keys) determined lazily)
-    # initialize with encoder dim only; we will rebuild once feat_keys known
-    head = None
+    encoder: Optional[StateEncoder] = None
+    head: Optional[nn.Module] = None
     criterion = nn.CrossEntropyLoss()
     optim: Optional[torch.optim.Optimizer] = None
     feat_keys: Optional[List[str]] = None
     start_epoch = 0
     start_idx = 0
 
-    # optional resume
-    ckpt = load_ckpt(args.ckpt, encoder, head, optim, device)
+    # optional resume (will apply once encoder/head are built)
+    ckpt = load_ckpt(args.ckpt, None, None, None, device)
     if ckpt:
         start_epoch = ckpt.get("epoch", 0)
         start_idx = ckpt.get("idx", 0)
         feat_keys = ckpt.get("feat_keys")
         num_classes = ckpt.get("num_classes", num_classes)
-        if feat_keys is not None:
-            head = nn.Linear(128 + len(feat_keys), num_classes).to(device)
-            optim = torch.optim.Adam(list(encoder.parameters()) + list(head.parameters()), lr=args.lr)
-            if "head" in ckpt and ckpt["head"]:
-                head.load_state_dict(ckpt["head"])
-            if "optim" in ckpt and ckpt["optim"]:
-                optim.load_state_dict(ckpt["optim"])
 
     total_steps = start_idx
+
+    ckpt_applied = False
 
     for epoch in range(start_epoch, args.epochs):
         for step, (seq, node_feat_dim, global_feats, label_val, npz_path) in enumerate(loader, 1):
@@ -145,6 +147,24 @@ def main():
             if label_val is None:
                 continue  # skip if label missing
             seq = to_device(seq, device)
+
+            # build encoder/head/optim lazily once we know node_feat_dim and global feat dim
+            if encoder is None:
+                encoder = StateEncoder(node_feat_dim=node_feat_dim, hidden_dim=128).to(device)
+                # if we have feat_keys already (e.g., from ckpt), build head/optim now
+                if feat_keys is not None:
+                    head = nn.Linear(128 + len(feat_keys), num_classes).to(device)
+                    optim = torch.optim.Adam(list(encoder.parameters()) + list(head.parameters()), lr=args.lr)
+                # apply checkpoint after models exist
+                if ckpt and not ckpt_applied:
+                    if "encoder" in ckpt:
+                        encoder.load_state_dict(ckpt["encoder"])
+                    if feat_keys is not None and head and "head" in ckpt and ckpt["head"]:
+                        head.load_state_dict(ckpt["head"])
+                    if optim and "optim" in ckpt and ckpt["optim"]:
+                        optim.load_state_dict(ckpt["optim"])
+                    ckpt_applied = True
+
             if label_mapping and int(label_val) in label_mapping:
                 label_idx = label_mapping[int(label_val)]
             else:
